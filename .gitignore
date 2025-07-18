@@ -1,0 +1,21 @@
+# Go tools
+vendor/
+*.test
+*.out
+*.log
+*.cache
+*.swp
+.DS_Store
+*.mod
+*.sum
+*.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Docker
+*.dockerignore
+*.env
+*.yml
