@@ -130,7 +130,7 @@ func (c *DaichiClient) GetBuildings(ctx context.Context) ([]DaichiBuilding, erro
 ## 🛠 Advanced Features
 
 ### 🧠 AI-Generated with Qwen3
-- Structs automatically mapped from TypeScript Zod schemas
+- Structs automatically
 - JSON responses validated against real API data
 - Circuit Breaker patterns for production resilience
 
