@@ -7,7 +7,7 @@ Go SDK для управления кондиционерами Daichi чере�
 ```bash
 go get github.com/savier89/daichi-ac-sdk
 
-
+```
 
 ---
 
