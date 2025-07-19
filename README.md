@@ -225,7 +225,7 @@ Let’s bring your AC systems online — smart, secure, and scalable.
 Use `WithDebug(true)` to see:
 ```text
 [INFO] Token request URL: https://web.daichicloud.ru/api/v4/token
-[INFO] User info received: {"done":true,"data":{"id":120980,"token":"...","mqttUser":{"username":"wu120980_ZkQKIvZi","password":"JhTfLGsCZYLssL1T"}}
+[INFO] User info received: {"done":true,"data":{"id":120980,"token":"...","mqttUser":{"username":"...","password":"..."}}
 ```
 
 ---
