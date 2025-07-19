@@ -1,4 +1,3 @@
-```markdown
 # Daichi AC SDK for Go / Daichi AC SDK для Go
  
 Go SDK for managing Daichi air conditioners via Wi-Fi module.
@@ -79,5 +78,3 @@ curl -v -X POST "https://web.daichicloud.ru/api/v4/token" \
 - Verify request parameters
 
 ---
-
-```
