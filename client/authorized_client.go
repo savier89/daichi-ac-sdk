@@ -28,7 +28,14 @@ func NewAuthorizedDaichiClient(ctx context.Context, username, password string, o
 	}, nil
 }
 
-func (c *AuthorizedDaichiClient) Ping(ctx context.Context) (string, error) {
-	c.baseClient.Logger("[INFO] Pinging API...")
-	return c.baseClient.Ping(ctx)
+// GetMqttUserInfo — возвращает информацию о пользователе в формате DaichiUser
+func (c *AuthorizedDaichiClient) GetMqttUserInfo(ctx context.Context) (*DaichiUser, error) {
+	c.baseClient.Logger("[INFO] Fetching MQTT user info...")
+	return c.baseClient.GetUserInfo(ctx)
+}
+
+// GetBuildings — возвращает список зданий
+func (c *AuthorizedDaichiClient) GetBuildings(ctx context.Context) ([]DaichiBuilding, error) {
+	c.baseClient.Logger("[INFO] Fetching buildings...")
+	return c.baseClient.GetBuildings(ctx)
 }
