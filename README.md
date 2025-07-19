@@ -13,6 +13,7 @@ go get github.com/savier89/daichi-ac-sdk
 
 ### Внимание!!!! Код написан нейросетью Qwen3 в качестве тестового испытания!
 
+### Attention!!!! The code is written by the Qwen3 neural network as a test trial!
 ---
 
 ### 🧨 **Что исправлено и улучшено**
