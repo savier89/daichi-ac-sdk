@@ -14,4 +14,5 @@ var (
 	ErrTokenExpired       = errors.New("token expired")
 	ErrInvalidURL         = errors.New("invalid URL: contains spaces or malformed")
 	ErrEndpointNotFound   = errors.New("API endpoint not found (404)")
+	ErrUnsupportedMethod  = errors.New("unsupported method for route")
 )

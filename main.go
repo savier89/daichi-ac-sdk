@@ -2,17 +2,16 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/savier89/daichi-ac-sdk/client"
 )
 
 func main() {
-	debugEnabled := true
-	loggerOption := client.WithDebug(debugEnabled)
+	logger := client.NewLogger(client.LogDebug, os.Stderr)
 
 	breaker := client.NewCircuitBreaker(client.CircuitBreakerConfig{
 		Name:        "daichi_api_breaker",
@@ -24,17 +23,18 @@ func main() {
 		},
 	})
 
+	// Создаем клиент
 	client, err := client.NewAuthorizedDaichiClient(
 		context.Background(),
-		"Your Login from web.daichicloud.ru",
-		"Your password",
-		// Default ClientID is sOJO7B6SqgaKudTfCzqLAy540cCuDzpI
+		"Your Login",
+		"Your Password",
 		client.WithClientID("sOJO7B6SqgaKudTfCzqLAy540cCuDzpI"),
-		loggerOption,
+		client.WithLogger(logger),
 		client.WithCircuitBreaker(breaker),
+		client.WithDebug(true),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create authorized client: %v", err)
+		log.Fatalf("Failed to create client: %v", err)
 	}
 
 	// Получаем информацию о пользователе
@@ -43,35 +43,43 @@ func main() {
 		log.Fatalf("Failed to fetch user info: %v", err)
 	}
 
-	// Выводим JSON
-	userJSON, _ := json.MarshalIndent(userInfo, "", "  ")
-	fmt.Println("User Info JSON:")
-	fmt.Println(string(userJSON))
-
-	// ✅ Пример доступа к MQTTUser
+	// ✅ Выводим MQTT-данные
 	if userInfo.MQTTUser != nil {
-		fmt.Println("MQTT Username:", userInfo.MQTTUser.Username)
-		fmt.Println("MQTT Password:", userInfo.MQTTUser.Password)
+		fmt.Printf("MQTT Username: %s\n", userInfo.MQTTUser.Username)
+		fmt.Printf("MQTT Password: %s\n", userInfo.MQTTUser.Password)
 	} else {
-		log.Println("MQTTUser is nil")
+		fmt.Println("MQTTUser is nil — проверьте, что /user возвращает данные в data.mqttUser")
 	}
 
-	// Получаем список зданий
 	buildings, err := client.GetBuildings(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to fetch buildings: %v", err)
 	}
 
-	// Выводим JSON
-	buildingsJSON, _ := json.MarshalIndent(buildings, "", "  ")
-	fmt.Println("Buildings JSON:")
-	fmt.Println(string(buildingsJSON))
+	// Получаем конкретное устройство
+	if len(buildings) > 0 && len(buildings[0].Places) > 0 {
+		kitchenAC := buildings[0].Places[0]
 
-	// ✅ Пример доступа к данным
-	for _, b := range buildings {
-		fmt.Printf("Building: %s, Places: %d\n", b.Title, b.PlacesCount)
-		for _, p := range b.Places {
-			fmt.Printf("  Device: %s, Status: %s, Temp: %.1f°C\n", p.Title, p.Status, p.CurTemp)
+		// Получаем актуальное состояние через /devices/{id}
+		device, err := client.GetDeviceState(context.Background(), kitchenAC.ID)
+		if err != nil {
+			log.Fatalf("Failed to fetch device state: %v", err)
+		}
+
+		// Выводим текущее состояние
+		fmt.Printf("Device: %s, Temp: %.1f°C, Online: %v\n",
+			device.Title, device.CurTemp, device.IsOnline())
+
+		// Выводим детали состояния
+		for _, detail := range device.State.Details {
+			for _, d := range detail.Details {
+				if d.Text != nil {
+					fmt.Printf("  - State Text: %s\n", *d.Text)
+				}
+				if d.Icon != nil {
+					fmt.Printf("  - Icon: %s\n", *d.Icon)
+				}
+			}
 		}
 	}
 }

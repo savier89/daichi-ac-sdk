@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,112 +16,23 @@ import (
 	"github.com/savier89/circuitbreaker"
 )
 
-// MQTTUser — отдельная структура для MQTT-данных
-type MQTTUser struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+// APIResponse — обертка для ответа сервера
+type APIResponse[T any] struct {
+	Done   bool `json:"done"`
+	Errors any  `json:"errors"`
+	Data   T    `json:"data"`
 }
 
-// DeviceState — структура для поля state
-type DeviceState struct {
-	IsOn bool `json:"isOn"`
-	Info struct {
-		Text      string   `json:"text"`
-		Icons     []string `json:"icons"`
-		IconsSvg  []string `json:"iconsSvg"`
-		IconNames []string `json:"iconNames"`
-	} `json:"info"`
-	Details []interface{} `json:"details"`
-}
-
-// DaichiBuildingDevice — структура устройства в здании
-type DaichiBuildingDevice struct {
-	ID                int             `json:"id"`
-	Serial            string          `json:"serial"`
-	Status            string          `json:"status"`
-	Title             string          `json:"title"`
-	CurTemp           float64         `json:"curTemp"`
-	State             DeviceState     `json:"state"` // ✅ Теперь структура
-	Features          map[string]bool `json:"features"`
-	GroupID           *interface{}    `json:"groupId,omitempty"`
-	BuildingID        int             `json:"buildingId"`
-	LastOnline        string          `json:"lastOnline"`
-	CreatedAt         string          `json:"createdAt"`
-	Pinned            bool            `json:"pinned"`
-	Access            string          `json:"access"`
-	Progress          *interface{}    `json:"progress,omitempty"`
-	CurrentPreset     *interface{}    `json:"currentPreset,omitempty"`
-	Timer             *interface{}    `json:"timer,omitempty"`
-	CloudType         string          `json:"cloudType"`
-	DistributionType  string          `json:"distributionType"`
-	Company           string          `json:"company"`
-	IsBle             bool            `json:"isBle"`
-	DeviceControlType string          `json:"deviceControlType"`
-	FirmwareType      string          `json:"firmwareType"`
-	VrfTitle          *interface{}    `json:"vrfTitle,omitempty"`
-	DeviceType        string          `json:"deviceType"`
-	Subscription      *interface{}    `json:"subscription,omitempty"`
-	SubscriptionID    *int            `json:"subscriptionId,omitempty"`
-	WarrantyNumber    *string         `json:"warrantyNumber,omitempty"`
-	ConditionerSerial *string         `json:"conditionerSerial,omitempty"`
-	UpdatedAt         *string         `json:"updatedAt,omitempty"`
-	Online            bool            `json:"online,omitempty"`
-}
-
-// DaichiUser — структура данных пользователя
-type DaichiUser struct {
-	ID                       int           `json:"id"`
-	Token                    string        `json:"token"`
-	Email                    string        `json:"email"`
-	MQTTUser                 *MQTTUser     `json:"mqttUser"`
-	IsEmailConfirmed         bool          `json:"isEmailConfirmed"`
-	Phone                    *string       `json:"phone,omitempty"`
-	IsPhoneConfirmed         bool          `json:"isPhoneConfirmed"`
-	FIO                      string        `json:"fio"`
-	Company                  string        `json:"company"`
-	UserType                 string        `json:"userType"`
-	ExpiredIn                *string       `json:"expiredIn,omitempty"`
-	DeleteAccountRequestedAt *string       `json:"deleteAccountRequestedAt,omitempty"`
-	Image                    *string       `json:"image,omitempty"`
-	AccessRequests           []interface{} `json:"accessRequests"`
-}
-
-// DaichiBuilding — структура здания с вложенными устройствами
-type DaichiBuilding struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Access      string `json:"access"`
-	PlacesCount int    `json:"placesCount"`
-	ShareCount  int    `json:"shareCount"`
-	UTC         int    `json:"utc"`
-	Coordinates struct {
-		Lat float64 `json:"lat"`
-		Lng float64 `json:"lng"`
-	} `json:"coordinates"`
-	GeoMode     bool                   `json:"geoMode"`
-	GeoState    string                 `json:"geoState"`
-	GeoZone     int                    `json:"geoZone"`
-	Address     string                 `json:"address"`
-	TriggeredBy *interface{}           `json:"triggeredBy,omitempty"`
-	HasSettings bool                   `json:"hasSettings"`
-	OwnTrigger  *interface{}           `json:"ownTrigger,omitempty"`
-	CloudType   string                 `json:"cloudType"`
-	TimeZone    string                 `json:"timeZone"`
-	Image       string                 `json:"image"`
-	Slogan      string                 `json:"slogan"`
-	Places      []DaichiBuildingDevice `json:"places"` // ✅ Список устройств
-}
-
+// Константы
 const (
-	// ✅ Константа установлена строго по инструкции из DefaultAPIURL.txt
 	DefaultAPIURL        = "https://web.daichicloud.ru/api/v4 "
 	DefaultUserInfoPath  = "/user"
 	DefaultBuildingsPath = "/buildings"
 	DefaultTokenPath     = "/token"
 	DefaultClientID      = "sOJO7B6SqgaKudTfCzqLAy540cCuDzpI"
-	DefaultRetries       = 3
 )
 
+// DaichiClient — клиент для работы с API
 type DaichiClient struct {
 	clientID   string
 	username   string
@@ -129,7 +40,7 @@ type DaichiClient struct {
 	httpClient *http.Client
 	token      string
 	tokenMutex sync.RWMutex
-	Logger     func(string, ...interface{})
+	Logger     *Logger
 	breaker    *circuitbreaker.CircuitBreaker
 }
 
@@ -157,42 +68,23 @@ func WithPassword(password string) Option {
 	}
 }
 
-// WithRetries — устанавливает количество повторных попыток
-func WithRetries(retries int) Option {
-	return func(c *DaichiClient) {
-		c.httpClient = &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConns:          100,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				DisableKeepAlives:     false,
-				MaxIdleConnsPerHost:   50,
-				ForceAttemptHTTP2:     true,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-		}
-	}
-}
-
 // WithLogger — устанавливает пользовательский логгер
-func WithLogger(logger func(string, ...interface{})) Option {
+func WithLogger(logger *Logger) Option {
 	return func(c *DaichiClient) {
 		if logger == nil {
-			logger = func(format string, args ...interface{}) {}
+			logger = NewLogger(LogInfo, os.Stderr)
 		}
 		c.Logger = logger
 	}
 }
 
-// WithDebug — включает или выключает DEBUG-логи
-func WithDebug(enable bool) Option {
+// WithLogLevel — устанавливает уровень логирования
+func WithLogLevel(level LogLevel) Option {
 	return func(c *DaichiClient) {
-		if enable {
-			c.Logger = func(format string, args ...interface{}) {
-				log.Printf("[DEBUG] "+format, args...)
-			}
+		if c.Logger == nil {
+			c.Logger = NewLogger(level, os.Stderr)
 		} else {
-			c.Logger = func(format string, args ...interface{}) {}
+			c.Logger.SetLevel(level)
 		}
 	}
 }
@@ -204,13 +96,29 @@ func WithCircuitBreaker(b *circuitbreaker.CircuitBreaker) Option {
 	}
 }
 
-// NewDaichiClient — создаёт клиент с опциями
+// WithDebug — включает дебаг-логи
+func WithDebug(debug bool) Option {
+	return func(c *DaichiClient) {
+		if debug {
+			c.Logger.SetLevel(LogDebug)
+		} else {
+			c.Logger.SetLevel(LogInfo)
+		}
+	}
+}
+
+// WithNoLogs — отключает все логи
+func WithNoLogs() Option {
+	return WithLogLevel(LogNone)
+}
+
+// NewDaichiClient — создает клиент с опциями
 func NewDaichiClient(opts ...Option) *DaichiClient {
 	client := &DaichiClient{
 		clientID: DefaultClientID,
 		username: "",
 		password: "",
-		Logger:   func(format string, args ...interface{}) {}, // по умолчанию — выключено
+		Logger:   NewLogger(LogInfo, os.Stderr),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -233,72 +141,47 @@ func NewDaichiClient(opts ...Option) *DaichiClient {
 	return client
 }
 
-// buildTokenRequest — создаёт POST-запрос для получения токена
-func buildTokenRequest(ctx context.Context, grantType string, c *DaichiClient) (*http.Request, error) {
-	values := url.Values{}
-	values.Add("grant_type", grantType)
-	values.Add("email", c.username)
-	values.Add("password", c.password)
-	values.Add("clientId", c.clientID)
-
-	body := strings.NewReader(values.Encode())
+// buildTokenRequest — создает POST-запрос для получения токена
+func buildTokenRequest(ctx context.Context, c *DaichiClient) (*http.Request, error) {
+	values := url.Values{
+		"grant_type": {"password"},
+		"email":      {c.username},
+		"password":   {c.password},
+		"clientId":   {c.clientID},
+	}
 
 	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(DefaultTokenPath))
 	if err != nil {
-		c.Logger("[ERROR] Failed to join token URL: %v", err)
+		c.Logger.Error("Failed to build token URL: %v", err)
 		return nil, fmt.Errorf("invalid token URL: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(values.Encode()))
 	if err != nil {
-		c.Logger("[ERROR] Failed to create token request: %v", err)
+		c.Logger.Error("Failed to create token request: %v", err)
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 
+	req.URL.RawQuery = values.Encode()
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-
-	c.Logger("[INFO] Token request URL: %s", reqURL)
-	c.Logger("[INFO] Token request body: %s", values.Encode())
+	c.Logger.Debug("Token request URL: %s?%s", reqURL, req.URL.RawQuery)
 	return req, nil
 }
 
 // fetchToken — общая логика получения токена
 func (c *DaichiClient) fetchToken(ctx context.Context, req *http.Request) (string, error) {
-	var resp *http.Response
-	var err error
-
-	for i := 0; i < DefaultRetries; i++ {
-		resp, err = c.httpClient.Do(req)
-		if err == nil {
-			break
-		}
-		c.Logger("[WARN] Retry #%d for %s", i+1, req.URL.String())
-		time.Sleep(time.Duration(i+1) * time.Second)
-	}
-
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.Logger("[ERROR] Token request failed: %v", err)
+		c.Logger.Error("Token request failed: %v", err)
 		return "", fmt.Errorf("token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	c.Logger("[DEBUG] Token response: %s", string(body))
-
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		c.Logger("[ERROR] Method Not Allowed (405)")
-		return "", ErrMethodNotAllowed
-	}
-
-	if resp.StatusCode == http.StatusNotFound {
-		c.Logger("[ERROR] API endpoint not found (404): %s", req.URL.String())
-		return "", ErrEndpointNotFound
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		c.Logger("[ERROR] Token request failed with status %d", resp.StatusCode)
-		return "", fmt.Errorf("token request failed with status %d", resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.Logger.Error("Failed to read token response: %v", err)
+		return "", fmt.Errorf("failed to read token response: %w", err)
 	}
 
 	var result struct {
@@ -311,12 +194,12 @@ func (c *DaichiClient) fetchToken(ctx context.Context, req *http.Request) (strin
 	}
 
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&result); err != nil {
-		c.Logger("[ERROR] Failed to decode token response: %v", err)
-		return "", fmt.Errorf("failed to decode token response: %w", err)
+		c.Logger.Error("Failed to decode token response: %v", err)
+		return "", fmt.Errorf("token unmarshal failed: %w", err)
 	}
 
 	if !result.Done {
-		c.Logger("[ERROR] Token request failed: %v", result.Errors)
+		c.Logger.Error("Token request failed: %v", result.Errors)
 		return "", fmt.Errorf("token request failed: %v", result.Errors)
 	}
 
@@ -333,25 +216,25 @@ func (c *DaichiClient) fetchToken(ctx context.Context, req *http.Request) (strin
 		return "", ErrTokenNotFound
 	}
 
+	c.Logger.Info("Token received: %s", token)
 	return token, nil
 }
 
-// GetToken — получает токен авторизации
+// GetToken — авторизация через /token
 func (c *DaichiClient) GetToken(ctx context.Context) error {
 	if c.username == "" || c.password == "" {
-		c.Logger("[ERROR] Username and password must be set")
+		c.Logger.Error("Username and password must be set")
 		return ErrMissingCredentials
 	}
 
-	req, err := buildTokenRequest(ctx, "password", c)
+	req, err := buildTokenRequest(ctx, c)
 	if err != nil {
-		c.Logger("[ERROR] Failed to build token request: %v", err)
 		return err
 	}
 
 	token, err := c.fetchToken(ctx, req)
 	if err != nil {
-		c.Logger("[ERROR] Failed to fetch token: %v", err)
+		c.Logger.Error("Failed to fetch token: %v", err)
 		return err
 	}
 
@@ -359,21 +242,20 @@ func (c *DaichiClient) GetToken(ctx context.Context) error {
 	c.token = token
 	c.tokenMutex.Unlock()
 
-	c.Logger("[INFO] Token received: %s", token)
 	return nil
 }
 
-// buildUserInfoRequest — создаёт GET-запрос для получения информации о пользователе
+// buildUserInfoRequest — создает GET-запрос для получения информации о пользователе
 func buildUserInfoRequest(ctx context.Context, c *DaichiClient) (*http.Request, error) {
 	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(DefaultUserInfoPath))
 	if err != nil {
-		c.Logger("[ERROR] Failed to join user info URL: %v", err)
+		c.Logger.Error("Failed to build user info URL: %v", err)
 		return nil, fmt.Errorf("invalid user info URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		c.Logger("[ERROR] Failed to create user info request: %v", err)
+		c.Logger.Error("Failed to create user info request: %v", err)
 		return nil, fmt.Errorf("failed to create user info request: %w", err)
 	}
 
@@ -386,11 +268,11 @@ func buildUserInfoRequest(ctx context.Context, c *DaichiClient) (*http.Request, 
 	}
 
 	req.Header.Set("Accept", "application/json")
-	c.Logger("[INFO] User info request URL: %s", reqURL)
+	c.Logger.Debug("User info request URL: %s", reqURL)
 	return req, nil
 }
 
-// GetUserInfo — возвращает информацию о пользователе в формате DaichiUser
+// GetUserInfo — возвращает информацию о пользователе
 func (c *DaichiClient) GetUserInfo(ctx context.Context) (*DaichiUser, error) {
 	req, err := buildUserInfoRequest(ctx, c)
 	if err != nil {
@@ -399,65 +281,62 @@ func (c *DaichiClient) GetUserInfo(ctx context.Context) (*DaichiUser, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.Logger("[ERROR] API unreachable: %v", err)
+		c.Logger.Error("API unreachable: %v", err)
 		return nil, fmt.Errorf("API unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		c.Logger("[ERROR] API endpoint not found (404): %s", req.URL.String())
+		c.Logger.Error("API endpoint not found (404): %s", req.URL.String())
 		return nil, ErrEndpointNotFound
 	}
 
 	if resp.StatusCode == http.StatusMethodNotAllowed {
-		c.Logger("[ERROR] Method Not Allowed (405): %s", req.URL.String())
+		c.Logger.Error("Method Not Allowed (405): %s", req.URL.String())
 		return nil, ErrMethodNotAllowed
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		c.Logger("[ERROR] Non-200 status code: %d", resp.StatusCode)
-		return nil, fmt.Errorf("non-200 status code: %d, response: %s", resp.StatusCode, string(body))
+		c.Logger.Error("Non-200 status code: %d, response: %s", resp.StatusCode, body)
+		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.Logger("[ERROR] Failed to read user info response: %v", err)
+		c.Logger.Error("Failed to read user info response: %v", err)
 		return nil, fmt.Errorf("failed to read user info response: %w", err)
 	}
 
-	// Обертка вокруг data
-	var result struct {
-		Done   bool       `json:"done"`
-		Errors any        `json:"errors"`
-		Data   DaichiUser `json:"data"`
+	c.Logger.Debug("User info raw: %s", body)
+
+	// ✅ Десериализуем через APIResponse[DaichiUser]
+	var response APIResponse[DaichiUser]
+	if err := json.Unmarshal(body, &response); err != nil {
+		c.Logger.Error("Failed to decode user info: %v", err)
+		return nil, fmt.Errorf("unmarshal failed: %w", err)
 	}
 
-	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&result); err != nil {
-		c.Logger("[ERROR] Failed to decode user info response: %v", err)
-		return nil, fmt.Errorf("failed to decode user info response: %w", err)
+	if !response.Done {
+		c.Logger.Error("Server returned errors: %v", response.Errors)
+		return nil, fmt.Errorf("server errors: %v", response.Errors)
 	}
 
-	if !result.Done {
-		c.Logger("[ERROR] Server returned errors: %v", result.Errors)
-		return nil, fmt.Errorf("server returned errors: %v", result.Errors)
-	}
-
-	c.Logger("[INFO] User info received: %s", string(body))
-	return &result.Data, nil
+	c.Logger.Info("User info received: %s", string(body))
+	return &response.Data, nil // ✅ Возвращаем данные из поля data
 }
 
-// buildBuildingsRequest — создаёт GET-запрос для получения зданий
+// buildBuildingsRequest — создает GET-запрос для получения зданий
 func buildBuildingsRequest(ctx context.Context, c *DaichiClient) (*http.Request, error) {
 	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(DefaultBuildingsPath))
 	if err != nil {
-		c.Logger("[ERROR] Failed to join buildings URL: %v", err)
+		c.Logger.Error("Failed to build buildings URL: %v", err)
 		return nil, fmt.Errorf("invalid buildings URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		c.Logger("[ERROR] Failed to create buildings request: %v", err)
+		c.Logger.Error("Failed to create buildings request: %v", err)
 		return nil, fmt.Errorf("failed to create buildings request: %w", err)
 	}
 
@@ -470,8 +349,34 @@ func buildBuildingsRequest(ctx context.Context, c *DaichiClient) (*http.Request,
 	}
 
 	req.Header.Set("Accept", "application/json")
-	c.Logger("[INFO] Buildings request URL: %s", reqURL)
+	c.Logger.Debug("Buildings request URL: %s", reqURL)
 	return req, nil
+}
+
+// DaichiBuilding — структура здания с вложенными устройствами (экспортированная)
+type DaichiBuilding struct {
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Access      string `json:"access"`
+	PlacesCount int    `json:"placesCount"`
+	ShareCount  int    `json:"shareCount"`
+	UTC         int    `json:"utc"`
+	Coordinates struct {
+		Lat float64 `json:"lat"`
+		Lng float64 `json:"lng"`
+	} `json:"coordinates"`
+	GeoMode     bool                         `json:"geoMode"`
+	GeoState    string                       `json:"geoState"`
+	GeoZone     int                          `json:"geoZone"`
+	Address     string                       `json:"address"`
+	TriggeredBy *interface{}                 `json:"triggeredBy,omitempty"`
+	HasSettings bool                         `json:"hasSettings"`
+	OwnTrigger  *interface{}                 `json:"ownTrigger,omitempty"`
+	CloudType   string                       `json:"cloudType"`
+	TimeZone    string                       `json:"timeZone"`
+	Image       string                       `json:"image"`
+	Slogan      string                       `json:"slogan"`
+	Places      []DaichiBuildingDeviceStruct `json:"places"` // ✅ Теперь структура
 }
 
 // GetBuildings — возвращает список зданий
@@ -483,50 +388,135 @@ func (c *DaichiClient) GetBuildings(ctx context.Context) ([]DaichiBuilding, erro
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		c.Logger("[ERROR] API unreachable: %v", err)
+		c.Logger.Error("API unreachable: %v", err)
 		return nil, fmt.Errorf("API unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		c.Logger("[ERROR] API endpoint not found (404): %s", req.URL.String())
+		c.Logger.Error("API endpoint not found (404): %s", req.URL.String())
 		return nil, ErrEndpointNotFound
 	}
 
 	if resp.StatusCode == http.StatusMethodNotAllowed {
-		c.Logger("[ERROR] Method Not Allowed (405): %s", req.URL.String())
+		c.Logger.Error("Method Not Allowed (405): %s", req.URL.String())
 		return nil, ErrMethodNotAllowed
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		c.Logger("[ERROR] Non-200 status code: %d", resp.StatusCode)
-		return nil, fmt.Errorf("non-200 status code: %d, response: %s", resp.StatusCode, string(body))
+		c.Logger.Error("Non-200 status code: %d, response: %s", resp.StatusCode, body)
+		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.Logger("[ERROR] Failed to read buildings response: %v", err)
+		c.Logger.Error("Failed to read buildings response: %v", err)
 		return nil, fmt.Errorf("failed to read buildings response: %w", err)
 	}
 
-	// Обертка вокруг data
-	var result struct {
-		Done   bool             `json:"done"`
-		Errors any              `json:"errors"`
-		Data   []DaichiBuilding `json:"data"`
+	var response APIResponse[[]DaichiBuilding]
+	if err := json.Unmarshal(body, &response); err != nil {
+		c.Logger.Error("Failed to decode buildings: %v", err)
+		return nil, fmt.Errorf("unmarshal failed: %w", err)
 	}
 
-	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&result); err != nil {
-		c.Logger("[ERROR] Failed to decode buildings response: %v", err)
-		return nil, fmt.Errorf("failed to decode buildings response: %w", err)
+	if !response.Done {
+		c.Logger.Error("Server returned errors: %v", response.Errors)
+		return nil, fmt.Errorf("server errors: %v", response.Errors)
 	}
 
-	if !result.Done {
-		c.Logger("[ERROR] Server returned errors: %v", result.Errors)
-		return nil, fmt.Errorf("server returned errors: %v", result.Errors)
+	// Преобразуем []DaichiBuildingDeviceStruct → []Device
+	for i := range response.Data {
+		for j := range response.Data[i].Places {
+			response.Data[i].Places[j] = DaichiBuildingDeviceStruct(response.Data[i].Places[j])
+		}
 	}
 
-	c.Logger("[INFO] Buildings received: %s", string(body))
-	return result.Data, nil
+	c.Logger.Info("Buildings received: %d", len(response.Data))
+	return response.Data, nil
+}
+
+// GetDeviceState — получает состояние устройства
+func (c *DaichiClient) GetDeviceState(ctx context.Context, deviceID int) (*DaichiBuildingDeviceStruct, error) {
+	// ✅ Формируем URL: /devices/{id}
+	devicePath := fmt.Sprintf("devices/%d", deviceID)
+	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(devicePath))
+	if err != nil {
+		c.Logger.Error("Failed to build device URL: %v", err)
+		return nil, fmt.Errorf("invalid device URL: %w", err)
+	}
+
+	// Создаем GET-запрос
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		c.Logger.Error("Failed to create device request: %v", err)
+		return nil, fmt.Errorf("failed to create device request: %w", err)
+	}
+
+	// Устанавливаем заголовки
+	c.tokenMutex.RLock()
+	token := c.token
+	c.tokenMutex.RUnlock()
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/json")
+	c.Logger.Debug("Device request URL: %s", reqURL)
+
+	// Отправляем запрос
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.Logger.Error("API unreachable: %v", err)
+		return nil, fmt.Errorf("API unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Проверяем статус
+	if resp.StatusCode == http.StatusNotFound {
+		c.Logger.Error("API endpoint not found (404): %s", req.URL.String())
+		return nil, ErrEndpointNotFound
+	}
+
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		c.Logger.Error("Method Not Allowed (405): %s", req.URL.String())
+		return nil, ErrMethodNotAllowed
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.Logger.Error("Non-200 status code: %d, response: %s", resp.StatusCode, body)
+		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
+	}
+
+	// Читаем тело
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.Logger.Error("Failed to read device response: %v", err)
+		return nil, fmt.Errorf("failed to read device response: %w", err)
+	}
+
+	c.Logger.Debug("Device response raw: %s", body)
+
+	// Проверяем, что это JSON
+	if !json.Valid(body) {
+		c.Logger.Error("Invalid JSON response: %s", body)
+		return nil, fmt.Errorf("invalid JSON response: %s", body)
+	}
+
+	// Десериализуем через APIResponse
+	var response APIResponse[DaichiBuildingDeviceStruct]
+	if err := json.Unmarshal(body, &response); err != nil {
+		c.Logger.Error("Failed to decode device: %v", err)
+		return nil, fmt.Errorf("unmarshal failed: %w", err)
+	}
+
+	if !response.Done {
+		c.Logger.Error("Server returned errors: %v", response.Errors)
+		return nil, fmt.Errorf("server errors: %v", response.Errors)
+	}
+
+	c.Logger.Info("Device state received: %s", string(body))
+	return &response.Data, nil
 }
