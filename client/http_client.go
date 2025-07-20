@@ -328,7 +328,7 @@ func (c *DaichiClient) GetUserInfo(ctx context.Context) (*DaichiUser, error) {
 
 // buildBuildingsRequest — создает GET-запрос для получения зданий
 func buildBuildingsRequest(ctx context.Context, c *DaichiClient) (*http.Request, error) {
-	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(DefaultBuildingsPath))
+	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), "buildings")
 	if err != nil {
 		c.Logger.Error("Failed to build buildings URL: %v", err)
 		return nil, fmt.Errorf("invalid buildings URL: %w", err)
@@ -347,9 +347,9 @@ func buildBuildingsRequest(ctx context.Context, c *DaichiClient) (*http.Request,
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-
 	req.Header.Set("Accept", "application/json")
 	c.Logger.Debug("Buildings request URL: %s", reqURL)
+
 	return req, nil
 }
 
@@ -437,9 +437,54 @@ func (c *DaichiClient) GetBuildings(ctx context.Context) ([]DaichiBuilding, erro
 	return response.Data, nil
 }
 
+// formatJSON — форматирует JSON для логирования
+func formatJSON(data []byte) string {
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, data, "", "  "); err != nil {
+		return fmt.Sprintf("failed to format JSON: %v", err)
+	}
+	return prettyJSON.String()
+}
+
+// formatDeviceState — форматирует состояние устройства для логирования
+func formatDeviceState(device DaichiBuildingDeviceStruct) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("ID: %d\n", device.ID))
+	sb.WriteString(fmt.Sprintf("Title: %s\n", device.Title))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", device.Status))
+	sb.WriteString(fmt.Sprintf("CurTemp: %.1f°C\n", device.CurTemp))
+	sb.WriteString(fmt.Sprintf("IsOnline: %v\n", device.IsOnline()))
+	sb.WriteString("State:\n")
+	sb.WriteString(fmt.Sprintf("  IsOn: %v\n", device.State.IsOn))
+	sb.WriteString("  Info:\n")
+	sb.WriteString(fmt.Sprintf("    Text: %s\n", device.State.Info.Text))
+	sb.WriteString("    Icons:\n")
+	for i, icon := range device.State.Info.Icons {
+		sb.WriteString(fmt.Sprintf("      %d: %s\n", i+1, icon))
+	}
+	sb.WriteString("    IconNames:\n")
+	for i, name := range device.State.Info.IconNames {
+		sb.WriteString(fmt.Sprintf("      %d: %s\n", i+1, name))
+	}
+	sb.WriteString("  Details:\n")
+	for _, detail := range device.State.Details {
+		for _, d := range detail.Details {
+			if d.Text != nil {
+				sb.WriteString(fmt.Sprintf("    Text: %s\n", *d.Text))
+			}
+			if d.Icon != nil {
+				sb.WriteString(fmt.Sprintf("    Icon: %s\n", *d.Icon))
+			}
+		}
+	}
+
+	return sb.String()
+}
+
 // GetDeviceState — получает состояние устройства
 func (c *DaichiClient) GetDeviceState(ctx context.Context, deviceID int) (*DaichiBuildingDeviceStruct, error) {
-	// ✅ Формируем URL: /devices/{id}
+	// ✅ Исправленный URL: /devices/{id}, а не /devices/{id}
 	devicePath := fmt.Sprintf("devices/%d", deviceID)
 	reqURL, err := url.JoinPath(strings.TrimSpace(DefaultAPIURL), strings.TrimSpace(devicePath))
 	if err != nil {
@@ -454,7 +499,6 @@ func (c *DaichiClient) GetDeviceState(ctx context.Context, deviceID int) (*Daich
 		return nil, fmt.Errorf("failed to create device request: %w", err)
 	}
 
-	// Устанавливаем заголовки
 	c.tokenMutex.RLock()
 	token := c.token
 	c.tokenMutex.RUnlock()
@@ -473,31 +517,15 @@ func (c *DaichiClient) GetDeviceState(ctx context.Context, deviceID int) (*Daich
 	}
 	defer resp.Body.Close()
 
-	// Проверяем статус
-	if resp.StatusCode == http.StatusNotFound {
-		c.Logger.Error("API endpoint not found (404): %s", req.URL.String())
-		return nil, ErrEndpointNotFound
-	}
-
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		c.Logger.Error("Method Not Allowed (405): %s", req.URL.String())
-		return nil, ErrMethodNotAllowed
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		c.Logger.Error("Non-200 status code: %d, response: %s", resp.StatusCode, body)
-		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
-	}
-
-	// Читаем тело
+	// Читаем тело ответа
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		c.Logger.Error("Failed to read device response: %v", err)
 		return nil, fmt.Errorf("failed to read device response: %w", err)
 	}
 
-	c.Logger.Debug("Device response raw: %s", body)
+	c.Logger.Debug("Device response raw: \n%s", formatJSON(body))
+	c.Logger.Debug("Device response raw (escaped): %s", body)
 
 	// Проверяем, что это JSON
 	if !json.Valid(body) {
@@ -517,6 +545,7 @@ func (c *DaichiClient) GetDeviceState(ctx context.Context, deviceID int) (*Daich
 		return nil, fmt.Errorf("server errors: %v", response.Errors)
 	}
 
-	c.Logger.Info("Device state received: %s", string(body))
+	// ✅ Улучшенный вывод состояния устройства
+	c.Logger.Info("Device state received: \n%s", formatDeviceState(response.Data))
 	return &response.Data, nil
 }

@@ -26,12 +26,12 @@ func main() {
 	// Создаем клиент
 	client, err := client.NewAuthorizedDaichiClient(
 		context.Background(),
-		"Your Login",
+		"Your login",
 		"Your Password",
 		client.WithClientID("sOJO7B6SqgaKudTfCzqLAy540cCuDzpI"),
 		client.WithLogger(logger),
 		client.WithCircuitBreaker(breaker),
-		client.WithDebug(true),
+		client.WithDebug(false),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -43,43 +43,49 @@ func main() {
 		log.Fatalf("Failed to fetch user info: %v", err)
 	}
 
-	// ✅ Выводим MQTT-данные
+	// Выводим MQTT-данные
 	if userInfo.MQTTUser != nil {
 		fmt.Printf("MQTT Username: %s\n", userInfo.MQTTUser.Username)
 		fmt.Printf("MQTT Password: %s\n", userInfo.MQTTUser.Password)
 	} else {
-		fmt.Println("MQTTUser is nil — проверьте, что /user возвращает данные в data.mqttUser")
+		log.Println("MQTTUser is nil — проверьте, что /user возвращает данные")
 	}
 
+	// Получаем список зданий
 	buildings, err := client.GetBuildings(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to fetch buildings: %v", err)
 	}
 
-	// Получаем конкретное устройство
-	if len(buildings) > 0 && len(buildings[0].Places) > 0 {
-		kitchenAC := buildings[0].Places[0]
+	// Получаем и выводим состояние всех устройств
+	for _, building := range buildings {
+		log.Printf("Building: %s", building.Title)
+		for _, device := range building.Places {
+			deviceState, err := client.GetDeviceState(context.Background(), device.ID)
+			if err != nil {
+				log.Printf("Failed to fetch state for device %d (%s): %v", device.ID, device.Title, err)
+				continue
+			}
 
-		// Получаем актуальное состояние через /devices/{id}
-		device, err := client.GetDeviceState(context.Background(), kitchenAC.ID)
-		if err != nil {
-			log.Fatalf("Failed to fetch device state: %v", err)
-		}
+			// Выводим состояние кондиционера
+			log.Printf("Device: %s", deviceState.Title)
+			log.Printf("  Temp: %.1f°C", deviceState.CurTemp)
+			log.Printf("  Online: %v", deviceState.IsOnline())
+			log.Printf("  IsOn: %v", deviceState.State.IsOn)
+			log.Printf("  Info Text: %s", deviceState.State.Info.Text)
 
-		// Выводим текущее состояние
-		fmt.Printf("Device: %s, Temp: %.1f°C, Online: %v\n",
-			device.Title, device.CurTemp, device.IsOnline())
-
-		// Выводим детали состояния
-		for _, detail := range device.State.Details {
-			for _, d := range detail.Details {
-				if d.Text != nil {
-					fmt.Printf("  - State Text: %s\n", *d.Text)
-				}
-				if d.Icon != nil {
-					fmt.Printf("  - Icon: %s\n", *d.Icon)
+			// Выводим детали состояния
+			for _, detail := range deviceState.State.Details {
+				for _, d := range detail.Details {
+					if d.Text != nil {
+						log.Printf("  - State Text: %s", *d.Text)
+					}
+					if d.Icon != nil {
+						log.Printf("  - Icon: %s", *d.Icon)
+					}
 				}
 			}
+			fmt.Println()
 		}
 	}
 }
